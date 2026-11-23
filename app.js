@@ -10,7 +10,7 @@ const INFO_LABEL = { '현설 일시': '현설', '입찰 일정': '입찰', '견�
 const STAGE_LABEL = { 4: '견적 제출' };
 const AMOUNT_KEYS = ['견적금액', '결정금액', '준공·정산금액'];
 
-const st = { sites: [], secrets: null, editing: false, cat: 'ALL', q: '', hideDone: true, logFilter: 'all', calMonth: null, calSel: null };
+const st = { sites: [], secrets: {}, editing: true, cat: 'ALL', q: '', hideDone: true, logFilter: 'all', calMonth: null, calSel: null };
 const $app = document.getElementById('app'), $layer = document.getElementById('layer');
 
 // ───── 아이콘 ─────
@@ -132,7 +132,7 @@ function nav(cur) {
   document.getElementById('bnav').innerHTML = h;
 }
 function editBtn() {
-  document.body.classList.toggle('editing', st.editing);
+  document.body.classList.toggle('editing', st.editing); return;
   document.getElementById('editbtn').innerHTML = st.editing ? `${ic('unlock')}<span>수정 중 · 나가기</span>` : `${ic('lock')}<span>수정 모드</span>`;
 }
 function toast(msg) { document.querySelectorAll('.toast').forEach((x) => x.remove()); const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
@@ -595,7 +595,7 @@ async function boot() {
     const data = await S.load();
     st.sites = data.sites.map((s) => ({ ...s, stages: (s.stages || []).concat(Array(14).fill('')).slice(0, 14), info: s.info || {}, logs: s.logs || [], docs: s.docs || [], short: s.short || s.name }));
   } catch (e) { $app.innerHTML = `<div class="panel"><div class="empty">데이터를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침 해주세요. (${esc(e.message)})</div></div>`; return; }
-  try { const p = sessionStorage.getItem('tsc-pw'); if (p) { const sec = await S.unlock(p); if (sec) { st.secrets = sec; st.editing = true; } } } catch (e) {}
+  try { st.secrets = (await S.unlock('')) || {}; } catch (e) { st.secrets = {}; }
   render();
 }
 document.addEventListener('visibilitychange', async () => {
