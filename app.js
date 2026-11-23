@@ -10,7 +10,7 @@ const INFO_LABEL = { '현설 일시': '현설', '입찰 일정': '입찰', '견�
 const STAGE_LABEL = { 4: '견적 제출' };
 const AMOUNT_KEYS = ['견적금액', '결정금액', '준공·정산금액'];
 
-const st = { sites: [], secrets: {}, editing: true, cat: 'ALL', q: '', hideDone: true, logFilter: 'all', calMonth: null, calSel: null };
+const st = { sites: [], secrets: {}, editing: true, cat: 'ALL', q: '', hideDone: true, logFilter: 'all', calMonth: null, calSel: null, open: null };
 const $app = document.getElementById('app'), $layer = document.getElementById('layer');
 
 // ───── 아이콘 ─────
@@ -140,42 +140,77 @@ const siteById = (id) => st.sites.find((s) => s.id === id);
 const go = (h) => { if (location.hash === '#' + h) render(); else location.hash = h; };
 
 // ───── 홈 ─────
+// ───── 차례(우리/쿠팡/모름/끝) ─────
+const TURNS = ['우리', '쿠팡', '모름', '끝'];
+const plan = (s) => ({ turn: (s.info || {})._turn || '', next: (s.info || {})._next || '', due: (s.info || {})._due || '', since: (s.info || {})._since || '' });
+const daysSince = (s, t) => { const d = parseDate(t, s.year); return d ? Math.max(0, Math.round((TODAY() - d) / 864e5)) : null; };
+function buckets() {
+  const todo = [], unknown = [], wait = [];
+  st.sites.forEach((s) => {
+    if (s.closed) return;
+    const p = plan(s); if (!p.turn || p.turn === '끝') return;
+    const age = daysSince(s, p.since);
+    const due = parseDate(p.due, s.year);
+    if (p.turn === '우리' && due) todo.push({ s, p, due });
+    else if (p.turn === '쿠팡' && (age == null || age <= 14)) wait.push({ s, p, age });
+    else unknown.push({ s, p, age, q: p.turn === '쿠팡' ? (p.next || '결과') + '?' : (p.next || '다음 할 일?') });
+  });
+  todo.sort((a, b) => a.due - b.due);
+  wait.sort((a, b) => (b.age || 0) - (a.age || 0));
+  const g = new Map();
+  unknown.forEach((u) => { const k = u.q + '|' + u.p.since; const e = g.get(k); if (e) e.more.push(u.s); else g.set(k, { ...u, more: [] }); });
+  const unk = [...g.values()].sort((a, b) => (b.age || 0) - (a.age || 0));
+  return { todo, unknown: unk, wait };
+}
+function flowOf(s) {
+  const x = s.stages.map((v) => stageState(v, s.year));
+  const FCF = [['현설', [0, 1, 2]], ['견적', [3, 4]], ['입찰', [5, 6]], ['수주', [7]], ['P.O', [8]], ['착공서류', [9]], ['시공', [10, 11]], ['준공', [12, 13]]];
+  const CPF = [['현설', [0, 1, 2]], ['견적', [3, 4, 5, 6]], ['결과', [7, 8]], ['시공', [9, 10, 11]], ['준공', [12, 13]]];
+  const F = s.cat === 'FC' ? FCF : CPF;
+  const ph = F.map(([label, idx]) => {
+    const v = idx.map((i) => x[i]);
+    const k = v.some((y) => y === 'now' || y === 'wait') ? 'now' : v.some((y) => y === 'done' || y === 'lost') ? 'done' : v.every((y) => y === 'skip') ? 'skip' : v.some((y) => y === 'plan') ? 'plan' : 'todo';
+    return { label, k };
+  });
+  if (!ph.some((p) => p.k === 'now')) {
+    let last = -1; ph.forEach((p, i) => { if (p.k === 'done') last = i; });
+    const nx = ph.findIndex((p, i) => i > last && p.k !== 'skip');
+    if (nx >= 0) ph[nx].k = plan(s).turn === '모름' ? 'unk' : 'now';
+  }
+  return ph;
+}
+const ddText = (d) => { const n = Math.round((d - TODAY()) / 864e5); return n < 0 ? `${-n}일 지남` : n === 0 ? '오늘' : n === 1 ? '내일' : `D-${n}`; };
+const ddLevel = (d) => { const n = Math.round((d - TODAY()) / 864e5); return n <= 0 ? 'now' : n <= 3 ? 'soon' : 'later'; };
+
 function viewHome() {
-  const T = TODAY(), end = new Date(+T + 14 * 864e5);
-  const evs = events().filter((e) => e.date >= T && e.date <= end);
-  const wt = waiting();
-  const actives = st.sites.filter((s) => siteStatus(s).active);
-  const issues = st.sites.flatMap((s) => openIssues(s).map((l) => ({ s, l })));
-  const quoting = st.sites.filter((s) => { const x = stageState(s.stages[3], s.year); return x === 'now' || (x === 'none' && stageState(s.stages[2], s.year) === 'done' && !s.closed); });
-  const recent = st.sites.flatMap((s) => s.logs.map((l) => ({ s, l, d: parseDate(l.date, s.year) }))).filter((x) => x.d).sort((a, b) => b.d - a.d).slice(0, 6);
-  const evRow = (e) => `<button class="row" data-site="${e.site.id}"><span class="dday ${ddCls(e.date)}">${dday(e.date)}</span><span class="main"><span class="t">${esc(e.site.short)} · ${esc(e.labels.join(', '))}</span><span class="s">${esc(e.texts.join(' / '))}</span></span><span class="date">${md(e.date)} (${WD[e.date.getDay()]})</span></button>`;
+  const { todo, unknown, wait } = buckets();
+  const urgent = todo.filter((t) => ddLevel(t.due) === 'now');
+  const op = st.open;
+  const item = (id, head, body) => `<button class="tcard ${op === id ? 'open' : ''}" data-open="${id}">${head}${op === id && body ? `<span class="tmore">${body}<span class="tgo" data-site-go="${id.split('|')[1]}">현장 보기 ›</span></span>` : ''}</button>`;
+  const flows = st.sites.filter((s) => !s.closed && plan(s).turn && plan(s).turn !== '끝');
+  const turnCls = { 우리: 'tu', 쿠팡: 'tc', 모름: 'tm' };
   return `
-  ${st.editing ? `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-act="paste">${ic('edit')}Claude 변경 붙여넣기</button></div>` : ''}
-  <section class="tiles">
-    <button class="tile" data-go="sites"><div class="k">진행 중 현장</div><div class="v num">${actives.length}</div></button>
-    <button class="tile warn" data-scroll="up"><div class="k">2주 안 일정</div><div class="v num">${evs.length}</div></button>
-    <button class="tile danger" data-scroll="iss"><div class="k">미해결 이슈</div><div class="v num">${issues.length}</div></button>
-    <button class="tile" data-scroll="wt"><div class="k">견적·회신 기다리는 일</div><div class="v num">${wt.length}</div></button>
-  </section>
-  <div class="cols">
-    <section id="up">
-      <div class="sec-h"><h2>이번 주 쳐낼 일</h2><span class="sub">오늘부터 2주, 마감 가까운 순</span></div>
-      <div class="panel">${evs.length ? evs.map(evRow).join('') : '<div class="empty">2주 안에 잡힌 일정이 없어요.</div>'}</div>
-    </section>
-    <div style="display:flex;flex-direction:column;gap:20px">
-      <section id="iss">
-        <div class="sec-h"><h2>미해결 이슈</h2><span class="sub">해결 처리하면 빠져요</span></div>
-        <div class="panel">${issues.length ? issues.map(({ s, l }) => `<button class="row" data-site="${s.id}"><span class="pill danger">${esc(s.short)}</span><span class="main"><span class="s" style="white-space:normal">${esc(l.text)}</span></span><span class="date">${esc(l.date)}</span></button>`).join('') : '<div class="empty">걸려 있는 이슈가 없어요.</div>'}</div>
-      </section>
-      <section id="wt">
-        <div class="sec-h"><h2>답 기다리는 일</h2><span class="sub">진행 중·대기·통보 예정</span></div>
-        <div class="panel">${wt.length ? wt.map((w) => `<button class="row" data-site="${w.site.id}"><span class="pill warn">${esc(w.site.short)}</span><span class="main"><span class="t" style="font-size:14px">${esc(w.label)}</span><span class="s">${esc(w.text)}</span></span></button>`).join('') : '<div class="empty">기다리는 일이 없어요.</div>'}</div>
-      </section>
+  ${urgent.length ? `<section class="alarm"><span class="alarm-k">오늘 마감</span>${urgent.map((t) => `<button class="alarm-i" data-site="${t.s.id}"><b>${esc(t.s.short)}</b> ${esc(t.p.next)}<span>${esc(t.p.due)}</span></button>`).join('')}</section>` : ''}
+  <div class="hrow"><h1 class="headline"><span class="hl-r">할 일 ${todo.length}</span> · <span class="hl-a">알아낼 일 ${unknown.length}</span> · 기다림 ${wait.length}</h1><button class="btn pri" data-act="paste">Claude 붙여넣기</button></div>
+  <section class="three">
+    <div class="col">
+      <h2 class="ch red">할 일</h2>
+      ${todo.map((t) => item('t|' + t.s.id, `<span class="tline ${ddLevel(t.due)}"><span class="tdd">${ddText(t.due)}</span><span class="tt"><b>${esc(t.s.short)}</b> ${esc(t.p.next)}</span></span>`, `${esc(t.p.due)} · ${esc(t.s.name)}`)).join('') || '<div class="none">급한 일이 없어요</div>'}
     </div>
-  </div>
+    <div class="col">
+      <h2 class="ch amber">알아낼 일</h2>
+      ${unknown.map((u) => item('u|' + u.s.id, `<span class="uline"><span class="tt"><b>${esc(u.s.short)}${u.more.length ? ` 외 ${u.more.length}곳` : ''}</b> · ${esc(u.q)}</span>${u.age != null ? `<span class="uage">${u.age}일</span>` : ''}</span>`, `${u.p.since ? esc(u.p.since) + ' 부터' : '기준일 없음'}${u.more.length ? ' · ' + [u.s, ...u.more].map((x) => esc(x.short)).join(', ') : ''}`)).join('') || '<div class="none">모르는 게 없어요</div>'}
+    </div>
+    <div class="col">
+      <h2 class="ch">기다림</h2>
+      ${wait.map((w) => item('w|' + w.s.id, `<span class="uline"><span class="tt"><b>${esc(w.s.short)}</b></span>${w.age != null ? `<span class="wage">${w.age}일</span>` : ''}</span><span class="wbar"><i style="width:${Math.min(100, ((w.age || 0) / 14) * 100).toFixed(0)}%"></i></span>`, `${esc(w.p.next || '결과 대기')} · ${esc(w.p.since)} 부터`)).join('') || '<div class="none">기다리는 건이 없어요</div>'}
+    </div>
+  </section>
   <section>
-    <div class="sec-h"><h2>최근 기록</h2><span class="sub">현장에서 올라온 순</span></div>
-    <div class="panel">${recent.map(({ s, l }) => `<button class="row" data-site="${s.id}"><span class="pill">${esc(s.short)}</span><span class="main"><span class="s">${esc(l.text)}</span></span>${(l.photos || []).length ? `<span class="pill ok">사진 ${l.photos.length}</span>` : ''}<span class="date">${esc(l.date)}</span></button>`).join('') || '<div class="empty">아직 기록이 없어요.</div>'}</div>
+    <h2 class="ch">현장별 흐름</h2>
+    <div class="tbl-wrap"><div class="flows">
+      ${flows.map((s) => `<button class="frow" data-site="${s.id}"><span class="fname"><b>${esc(s.short)}</b><small>${s.cat === 'FC' ? 'FC' : s.cat === 'MB' ? '캠프' : '기타'}</small></span><span class="fsteps">${flowOf(s).map((p) => `<i class="fs ${p.k}">${esc(p.label)}${p.k === 'unk' ? ' ?' : ''}</i>`).join('')}</span><span class="fturn ${turnCls[plan(s).turn] || ''}">${esc(plan(s).turn)}</span></button>`).join('')}
+    </div></div>
   </section>`;
 }
 
@@ -189,7 +224,7 @@ function viewSites() {
     const ss = siteStatus(s), oi = openIssues(s).length, pc = photoCount(s), ll = lastLog(s);
     return `<button class="card ${ss.active ? '' : 'closed'}" data-site="${s.id}">
       <div class="card-h"><h3>${esc(s.name)}</h3><span class="pill ${ss.cls}">${esc(ss.label)}</span></div>
-      <div class="st">${esc(ss.text || s.memo || '')}</div>
+      <div class="st">${plan(s).turn ? `<span class="ct t-${plan(s).turn}">${esc(plan(s).turn)}</span> ` : ''}${esc(plan(s).next || ss.text || s.memo || '')}${plan(s).due ? ` · ${esc(plan(s).due)}` : ''}</div>
       <div class="bar">${ss.states.map((x, i) => `<i class="${x}" title="${STAGES[i]}"></i>`).join('')}</div>
       <div class="meta">${oi ? `<span class="pill danger">이슈 ${oi}</span>` : ''}<span>기록 ${s.logs.length}</span><span>사진 ${pc}</span>${ll ? `<span>최근 ${md(ll)}</span>` : ''}<span style="margin-left:auto">${CATS[s.cat]}</span></div>
     </button>`;
@@ -226,9 +261,13 @@ function viewSite(id) {
   return `
   <a class="back" href="#sites">${ic('back')}현장 목록</a>
   <div class="d-head">
-    <div><h2>${esc(s.name)}</h2><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><span class="pill">${CATS[s.cat]}${s.kind ? ' · ' + esc(s.kind) : ''}</span><span class="pill ${ss.cls}">${esc(ss.label)}</span>${ss.text ? `<span class="pill">${esc(ss.text)}</span>` : ''}</div></div>
+    <div><h2>${esc(s.name)}</h2><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><span class="pill">${CATS[s.cat]}${s.kind ? ' · ' + esc(s.kind) : ''}</span></div></div>
     <div style="display:flex;gap:8px"><button class="btn ed" data-act="edit-site">${ic('edit')}기본정보 고치기</button><button class="btn" data-act="excel-one">${ic('dl')}엑셀</button></div>
   </div>
+  <section class="planbox">
+    <div class="pturns">${TURNS.map((t) => `<button class="pt ${plan(s).turn === t ? 'on t-' + t : ''}" data-act="set-turn" data-t="${t}">${t === '끝' ? '끝남' : t + ' 차례'}</button>`).join('')}</div>
+    <button class="pnext" data-act="edit-plan"><span class="pk">다음</span><b>${esc(plan(s).next || '정해지지 않음')}</b>${plan(s).due ? `<span class="pdue">${esc(plan(s).due)}</span>` : ''}${plan(s).since ? `<span class="psince">${esc(plan(s).since)}부터</span>` : ''}<span class="pedit">고치기</span></button>
+  </section>
   <section>
     <div class="sec-h"><h2>진행 단계</h2>${st.editing ? '<span class="sub">칸을 누르면 고칠 수 있어요</span>' : ''}</div>
     <div class="stages">${s.stages.map((v, i) => `<button class="stage ${ss.states[i]}" data-act="edit-stage" data-i="${i}"><div class="n">${i + 1}. ${STAGES[i]}</div><div class="v">${esc(v || '–')}</div></button>`).join('')}</div>
@@ -380,6 +419,7 @@ function planChanges(list) {
     if (op === 'info') { const k = findInfoKey(c.key); if (!k) return bad('항목 이름을 모름: ' + c.key); return { c, ok: true, s, k, label: `${s.short} · ${k}: ${c.value}` }; }
     if (op === 'memo') return { c, ok: true, s, label: `${s.short} · 메모: ${c.value}` };
     if (op === 'log') { if (!c.text) return bad('내용 없음'); return { c, ok: true, s, label: `${s.short} · 기록 추가 (${c.date || '날짜 없음'}): ${c.text}` }; }
+    if (op === 'plan') { if (c.turn && !TURNS.includes(c.turn)) return bad('차례는 우리/쿠팡/모름/끝 중 하나'); return { c, ok: true, s, label: `${s.short} · ${c.turn ? c.turn + ' 차례 · ' : ''}다음: ${c.next || plan(s).next || '-'}${c.due ? ' · ' + c.due : ''}` }; }
     if (op === 'doc') { if (!c.name) return bad('서류명 없음'); const ex = s.docs.find((d) => norm(d.name) === norm(c.name)); return { c, ok: true, s, ex, label: `${s.short} · 서류 ${ex ? '수정' : '추가'}: ${c.name} ${c.status || ''}` }; }
     return bad('모르는 종류: ' + op);
   });
@@ -399,6 +439,7 @@ async function applyPlan(plan) {
     if (c.op === 'info') { const row = { ...s, info: { ...s.info, [p.k]: c.value || '' } }; if (!c.value) delete row.info[p.k]; await S.saveSite(row); s.info = row.info; }
     if (c.op === 'memo') { const row = { ...s, memo: c.value || '' }; await S.saveSite(row); s.memo = row.memo; }
     if (c.op === 'log') { const l = { id: S.uid(), date: c.date || md(TODAY()), kind: '기록', text: c.text, result: c.result || '', note: '', done: false, photos: [] }; await S.saveLog(s.id, l); s.logs.push(l); }
+    if (c.op === 'plan') { const info = { ...s.info }; if (c.turn) { if (c.turn !== info._turn) info._since = c.since || md(TODAY()); info._turn = c.turn; } if (c.next !== undefined) info._next = c.next; if (c.due !== undefined) info._due = c.due; if (c.since) info._since = c.since; await S.saveSite({ ...s, info }); s.info = info; }
     if (c.op === 'doc') { const d = p.ex ? { ...p.ex, date: c.date ?? p.ex.date, status: c.status ?? p.ex.status, note: c.note ?? p.ex.note } : { id: S.uid(), date: c.date || '', name: c.name, status: c.status || '', note: c.note || '' }; await S.saveDoc(s.id, d); if (p.ex) Object.assign(p.ex, d); else s.docs.push(d); }
     n++;
   }
@@ -430,6 +471,21 @@ function pasteChanges() {
   });
 }
 
+function editPlan(s) {
+  const p = plan(s);
+  dialog(`<h3>${esc(s.short)} · 다음 할 일</h3>
+  <div class="f"><label>차례</label><div class="quick">${TURNS.map((t) => `<button class="btn ${p.turn === t ? 'pri' : ''}" data-tn="${t}">${t}</button>`).join('')}</div></div>
+  <div class="f"><label for="p-next">다음 할 일 (모르면 질문으로: 입찰 결과?)</label><input id="p-next" value="${esc(p.next)}"></div>
+  <div class="f2"><div class="f"><label for="p-due">기한</label><input id="p-due" value="${esc(p.due)}" placeholder="11/25"></div><div class="f"><label for="p-since">언제부터</label><input id="p-since" value="${esc(p.since)}" placeholder="${md(TODAY())}"></div></div>
+  <div class="dlg-f"><button class="btn" data-close>취소</button><button class="btn pri" id="ok">저장</button></div>`, (d, close) => {
+    let turn = p.turn;
+    d.querySelectorAll('[data-tn]').forEach((b) => (b.onclick = () => { turn = b.dataset.tn; d.querySelectorAll('[data-tn]').forEach((x) => x.classList.toggle('pri', x === b)); if (turn !== p.turn && !d.querySelector('#p-since').value) d.querySelector('#p-since').value = md(TODAY()); }));
+    d.querySelector('#ok').onclick = async () => {
+      const info = { ...s.info, _turn: turn, _next: d.querySelector('#p-next').value.trim(), _due: d.querySelector('#p-due').value.trim(), _since: d.querySelector('#p-since').value.trim() || (turn !== p.turn ? md(TODAY()) : p.since) };
+      if (await guard(() => S.saveSite({ ...s, info }), '저장했어요')) { s.info = info; close(); render(); }
+    };
+  });
+}
 function confirmBox(msg, yes) {
   dialog(`<h3>확인</h3><p style="margin:0">${esc(msg)}</p><div class="dlg-f"><button class="btn" data-close>취소</button><button class="btn pri" id="yes" style="background:var(--danger);border-color:var(--danger)">지우기</button></div>`, (d, close) => { d.querySelector('#yes').onclick = async () => { close(); await yes(); render(); }; });
 }
@@ -553,6 +609,8 @@ async function excel(onlyId) {
 
 // ───── 클릭 처리 ─────
 document.addEventListener('click', (e) => {
+  const sg = e.target.closest('[data-site-go]'); if (sg && !$layer.contains(sg)) return go('site-' + sg.dataset.siteGo);
+  const op = e.target.closest('[data-open]'); if (op && !$layer.contains(op)) { st.open = st.open === op.dataset.open ? null : op.dataset.open; return render(); }
   const t = e.target.closest('[data-site],[data-go],[data-scroll],[data-cat],[data-act],[data-lf],[data-mon],[data-day],[data-view]');
   if (!t || $layer.contains(t)) return;
   const id = (location.hash.match(/^#site-(.+)/) || [])[1]; const s = id && siteById(id);
@@ -572,6 +630,8 @@ document.addEventListener('click', (e) => {
   if (a === 'paste') return pasteChanges();
   if (!s) return;
   if (a === 'edit-stage') return editStage(s, +t.dataset.i);
+  if (a === 'set-turn') { const tn = t.dataset.t; const info = { ...s.info, _turn: tn, _since: plan(s).turn === tn ? plan(s).since : md(TODAY()) }; guard(() => S.saveSite({ ...s, info }), '저장했어요').then((ok) => { if (ok) { s.info = info; render(); } }); return; }
+  if (a === 'edit-plan') return editPlan(s);
   if (a === 'edit-site') return editSite(s);
   if (a === 'edit-secret') return editSecret(s);
   if (a === 'add-log') return editLog(s, null);
