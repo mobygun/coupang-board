@@ -254,6 +254,13 @@ table.docs td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:t
 .pk{color:var(--muted);font-size:13px} .pdue{color:var(--red);font-weight:700} .psince{color:var(--muted);font-size:13px} .pedit{margin-left:auto;color:var(--accent);font-size:13px}
 @media (max-width:760px){.three{grid-template-columns:1fr}.headline{font-size:24px}.alarm-i{font-size:16px}}
 
+.feed{display:flex;flex-direction:column;border-top:1.5px solid var(--ink)}
+.fitem{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;padding:10px 4px;border:0;border-bottom:1px solid var(--line);background:none;text-align:left;cursor:pointer;width:100%}
+.fitem:hover{background:var(--soft)}
+.fwhen{color:var(--muted);font-size:12.5px;width:84px;font-variant-numeric:tabular-nums}
+.fwho{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--muted)} .fwho.ai{background:var(--accent-soft);color:var(--accent)}
+.fsite{font-weight:700;min-width:64px} .fsum{flex:1;min-width:200px}
+.factions{flex-basis:100%;display:flex;gap:14px;padding-left:96px} .fa{color:var(--accent);font-size:13.5px;font-weight:500} .fa.dim{color:var(--muted)}
 /* 휴대폰 */
 .bnav{display:none}
 @media (max-width:760px){
@@ -286,9 +293,9 @@ table.docs td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:t
 <main id="app"></main>
 <nav class="bnav" id="bnav"></nav>
 <div id="layer"></div>
-<script src="config.js?v=6"></script>
+<script src="config.js?v=7"></script>
 <script src="seed.js" onerror="void 0"></script>
-<script src="store.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="store.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

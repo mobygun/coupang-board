@@ -36,7 +36,9 @@
     const need = () => { if (!DEMO_PASS || pass !== DEMO_PASS) throw new Error('수정 모드가 아니에요'); };
     return {
       mode: 'demo', uid,
-      async load() { return clone(db); },
+      async load() { return { ...clone(db), activity: [] }; },
+      apply: null,
+      async deleteActivity() {},
       async unlock(p) { if (!DEMO_PASS || p !== DEMO_PASS) return null; pass = p; return clone(secrets); },
       lock() { pass = null; },
       async saveSite(s) { need(); const cur = site(s.id); if (cur) Object.assign(cur, s, { logs: cur.logs, docs: cur.docs }); else db.sites.push({ ...s, logs: [], docs: [] }); persist(); },
@@ -66,13 +68,15 @@
       mode: 'live', uid,
       async load() {
         const c = await client();
-        const [s, l, d] = await Promise.all([c.from('sites').select('*').order('sort'), c.from('logs').select('*'), c.from('docs').select('*')]);
+        const [s, l, d, a] = await Promise.all([c.from('sites').select('*').order('sort'), c.from('logs').select('*'), c.from('docs').select('*'), c.from('activity').select('*').order('id', { ascending: false }).limit(40)]);
         const sites = ok(s).map((x) => ({ ...x, logs: [], docs: [] }));
         const by = Object.fromEntries(sites.map((x) => [x.id, x]));
         ok(l).forEach((x) => by[x.site_id] && by[x.site_id].logs.push(x));
         ok(d).forEach((x) => by[x.site_id] && by[x.site_id].docs.push(x));
-        return { sites };
+        return { sites, activity: a.error ? [] : a.data };
       },
+      async apply(changes, who) { return ok(await (await client()).rpc('tsc_apply', { p_pass: pass || '', p_changes: { changes }, p_who: who || '사람' })); },
+      async deleteActivity(id) { await rpc('tsc_activity_edit', { p_id: id, p_summary: '', p_delete: true }); },
       async unlock(p) {
         const c = await client();
         const { data, error } = await c.rpc('tsc_secrets', { p_pass: p });

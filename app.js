@@ -10,7 +10,7 @@ const INFO_LABEL = { '현설 일시': '현설', '입찰 일정': '입찰', '견�
 const STAGE_LABEL = { 4: '견적 제출' };
 const AMOUNT_KEYS = ['견적금액', '결정금액', '준공·정산금액'];
 
-const st = { sites: [], secrets: {}, editing: true, cat: 'ALL', q: '', hideDone: true, logFilter: 'all', calMonth: null, calSel: null, open: null };
+const st = { sites: [], secrets: {}, editing: true, cat: 'ALL', q: '', hideDone: true, logFilter: 'all', calMonth: null, calSel: null, open: null, activity: [] };
 const $app = document.getElementById('app'), $layer = document.getElementById('layer');
 
 // ───── 아이콘 ─────
@@ -206,6 +206,10 @@ function viewHome() {
       ${wait.map((w) => item('w|' + w.s.id, `<span class="uline"><span class="tt"><b>${esc(w.s.short)}</b></span>${w.age != null ? `<span class="wage">${w.age}일</span>` : ''}</span><span class="wbar"><i style="width:${Math.min(100, ((w.age || 0) / 14) * 100).toFixed(0)}%"></i></span>`, `${esc(w.p.next || '결과 대기')} · ${esc(w.p.since)} 부터`)).join('') || '<div class="none">기다리는 건이 없어요</div>'}
     </div>
   </section>
+  ${st.activity.length ? `<section>
+    <h2 class="ch">최근 반영</h2>
+    <div class="feed">${st.activity.slice(0, 15).map((a) => { const s = siteById(a.site_id); const id = 'a|' + a.site_id + '|' + a.id; const t = new Date(a.at); return `<button class="fitem ${st.open === id ? 'open' : ''}" data-open="${id}"><span class="fwhen">${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</span><span class="fwho ${a.who === 'AI' ? 'ai' : ''}">${esc(a.who)}</span><span class="fsite">${esc(s ? s.short : '')}</span><span class="fsum">${esc(a.summary)}</span>${st.open === id ? `<span class="factions"><span class="fa" data-feed="fix" data-aid="${a.id}">고치기</span><span class="fa" data-site-go="${esc(a.site_id)}">현장 보기</span><span class="fa dim" data-feed="del" data-aid="${a.id}">목록에서 빼기</span></span>` : ''}</button>`; }).join('')}</div>
+  </section>` : ''}
   <section>
     <h2 class="ch">현장별 흐름</h2>
     <div class="tbl-wrap"><div class="flows">
@@ -465,7 +469,14 @@ function pasteChanges() {
     };
     d.querySelector('#go').onclick = async () => {
       d.querySelector('#go').disabled = true;
-      try { const n = await applyPlan(plan); close(); render(); toast(`${n}건 반영했어요`); }
+      try {
+        let n;
+        if (S.apply) {
+          const ops = plan.filter((p) => p.ok).map((p) => ({ ...p.c, site_id: p.s ? p.s.id : undefined, stage: p.i != null ? STAGES[p.i] : p.c.stage, key: p.k || p.c.key }));
+          const r = await S.apply(ops, '붙여넣기'); n = r.applied; await reload();
+        } else n = await applyPlan(plan);
+        close(); render(); toast(`${n}건 반영했어요`);
+      }
       catch (e) { d.querySelector('#perr').textContent = '반영 중 멈췄어요: ' + e.message + ' (앞부분은 이미 저장됐을 수 있어요)'; d.querySelector('#go').disabled = false; }
     };
   });
@@ -610,6 +621,18 @@ async function excel(onlyId) {
 // ───── 클릭 처리 ─────
 document.addEventListener('click', (e) => {
   const sg = e.target.closest('[data-site-go]'); if (sg && !$layer.contains(sg)) return go('site-' + sg.dataset.siteGo);
+  const fd = e.target.closest('[data-feed]');
+  if (fd && !$layer.contains(fd)) {
+    const a = st.activity.find((x) => String(x.id) === fd.dataset.aid); if (!a) return;
+    const s = siteById(a.site_id);
+    if (fd.dataset.feed === 'del') { guard(() => S.deleteActivity(a.id), '목록에서 뺐어요').then((ok) => { if (ok) { st.activity = st.activity.filter((x) => x !== a); render(); } }); return; }
+    if (!s) return;
+    if (a.op === 'log') { const l = s.logs.find((x) => x.id === a.ref); return l ? editLog(s, l) : go('site-' + s.id); }
+    if (a.op === 'doc') { const d = s.docs.find((x) => x.id === a.ref); return d ? editDoc(s, d) : go('site-' + s.id); }
+    if (a.op === 'plan') return editPlan(s);
+    if (a.op === 'stage') { const i = STAGES.findIndex((x) => (a.summary || '').startsWith(x + ':')); return i >= 0 ? editStage(s, i) : go('site-' + s.id); }
+    return go('site-' + s.id);
+  }
   const op = e.target.closest('[data-open]'); if (op && !$layer.contains(op)) { st.open = st.open === op.dataset.open ? null : op.dataset.open; return render(); }
   const t = e.target.closest('[data-site],[data-go],[data-scroll],[data-cat],[data-act],[data-lf],[data-mon],[data-day],[data-view]');
   if (!t || $layer.contains(t)) return;
@@ -647,6 +670,12 @@ document.getElementById('editbtn').onclick = () => {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $layer.innerHTML = ''; });
 window.addEventListener('hashchange', () => { window.scrollTo(0, 0); render(); });
 
+async function reload() {
+  const data = await S.load();
+  st.sites = data.sites.map((s) => ({ ...s, stages: (s.stages || []).concat(Array(14).fill('')).slice(0, 14), info: s.info || {}, logs: s.logs || [], docs: s.docs || [], short: s.short || s.name }));
+  st.activity = data.activity || [];
+  render();
+}
 // ───── 시작 ─────
 async function boot() {
   if (S.mode === 'demo') document.getElementById('demonote').hidden = false;
@@ -654,13 +683,14 @@ async function boot() {
   try {
     const data = await S.load();
     st.sites = data.sites.map((s) => ({ ...s, stages: (s.stages || []).concat(Array(14).fill('')).slice(0, 14), info: s.info || {}, logs: s.logs || [], docs: s.docs || [], short: s.short || s.name }));
+    st.activity = data.activity || [];
   } catch (e) { $app.innerHTML = `<div class="panel"><div class="empty">데이터를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침 해주세요. (${esc(e.message)})</div></div>`; return; }
   try { st.secrets = (await S.unlock('')) || {}; } catch (e) { st.secrets = {}; }
   render();
 }
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible' || S.mode !== 'live' || $layer.innerHTML) return;
-  try { const data = await S.load(); st.sites = data.sites.map((s) => ({ ...s, stages: (s.stages || []).concat(Array(14).fill('')).slice(0, 14), info: s.info || {}, short: s.short || s.name })); render(); } catch (e) {}
+  try { await reload(); } catch (e) {}
 });
 boot();
 })();
