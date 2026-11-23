@@ -150,6 +150,7 @@ function viewHome() {
   const recent = st.sites.flatMap((s) => s.logs.map((l) => ({ s, l, d: parseDate(l.date, s.year) }))).filter((x) => x.d).sort((a, b) => b.d - a.d).slice(0, 6);
   const evRow = (e) => `<button class="row" data-site="${e.site.id}"><span class="dday ${ddCls(e.date)}">${dday(e.date)}</span><span class="main"><span class="t">${esc(e.site.short)} · ${esc(e.labels.join(', '))}</span><span class="s">${esc(e.texts.join(' / '))}</span></span><span class="date">${md(e.date)} (${WD[e.date.getDay()]})</span></button>`;
   return `
+  ${st.editing ? `<div style="display:flex;justify-content:flex-end"><button class="btn pri" data-act="paste">${ic('edit')}Claude 변경 붙여넣기</button></div>` : ''}
   <section class="tiles">
     <button class="tile" data-go="sites"><div class="k">진행 중 현장</div><div class="v num">${actives.length}</div></button>
     <button class="tile warn" data-scroll="up"><div class="k">2주 안 일정</div><div class="v num">${evs.length}</div></button>
@@ -198,7 +199,7 @@ function viewSites() {
     <div class="seg" role="tablist">${[['ALL', '전체'], ['FC', CATS.FC], ['MB', CATS.MB], ['ETC', CATS.ETC]].map(([c, n]) => `<button data-cat="${c}" class="${st.cat === c ? 'on' : ''}">${n} <span class="num">${counts(c)}</span></button>`).join('')}</div>
     <input class="search" id="q" type="search" placeholder="현장 이름 찾기" value="${esc(st.q)}">
     <label class="chk"><input type="checkbox" id="hide" ${st.hideDone ? 'checked' : ''}> 끝난 현장 숨기기</label>
-    <span style="margin-left:auto;display:flex;gap:8px"><button class="btn ed" data-act="add-site">${ic('plus')}현장 추가</button><button class="btn" data-act="excel">${ic('dl')}엑셀로 받기</button></span>
+    <span style="margin-left:auto;display:flex;gap:8px"><button class="btn ed" data-act="paste">${ic('edit')}Claude 변경 붙여넣기</button><button class="btn ed" data-act="add-site">${ic('plus')}현장 추가</button><button class="btn" data-act="excel">${ic('dl')}엑셀로 받기</button></span>
   </div>
   <div class="legend"><span><i style="background:var(--accent)"></i>완료</span><span><i style="background:var(--warn)"></i>진행·대기</span><span><i style="box-shadow:inset 0 0 0 1.5px var(--accent)"></i>예정</span><span><i style="background:repeating-linear-gradient(45deg,var(--line) 0 3px,transparent 3px 6px)"></i>해당 없음</span><span><i style="background:var(--line)"></i>미진행</span><span>막대 14칸 = ${STAGES[0]} → ${STAGES[13]}</span></div>
   ${list.length ? `<div class="cards">${list.map(card).join('')}</div>` : '<div class="panel"><div class="empty">조건에 맞는 현장이 없어요.</div></div>'}`;
@@ -353,6 +354,82 @@ function editSite(s) {
     if (del) del.onclick = () => confirmBox(`'${s.name}' 현장과 기록 ${s.logs.length}건을 지울까요? 되돌릴 수 없어요.`, async () => { if (await guard(() => S.deleteSite(s.id), '삭제했어요')) { st.sites = st.sites.filter((x) => x !== s); go('sites'); } });
   });
 }
+
+// ───── Claude 변경 붙여넣기 ─────
+const norm = (x) => String(x || '').toLowerCase().replace(/[\s()_\-·]/g, '');
+function findSite(q) {
+  if (!q) return null; const n = norm(q);
+  return st.sites.find((s) => s.id === q) || st.sites.find((s) => norm(s.short) === n || norm(s.name) === n)
+    || st.sites.find((s) => norm(s.name).includes(n) || (n.includes(norm(s.short)) && norm(s.short).length >= 2));
+}
+const STAGE_ALIAS = { '서류제출일': 4, '견적제출': 4, '견적': 3, 'po': 8, 'po발행': 8, '수주': 7, '관련서류제출': 6, '현설공고일': 0 };
+function findStage(q) {
+  if (typeof q === 'number' || /^\d+$/.test(q)) { const i = +q - 1; return i >= 0 && i < 14 ? i : -1; }
+  const n = norm(q).replace(/\./g, ''); const i = STAGES.findIndex((x) => norm(x).replace(/\./g, '') === n);
+  return i >= 0 ? i : (STAGE_ALIAS[n] ?? -1);
+}
+const INFO_ALIAS = { '주소': '비고', '현설': '현설 일시', '입찰': '입찰 일정', '견적제출기한': '견적 제출기한', '착공서류': '착공서류 제출기한', '준공서류': '준공서류 제출기한', '공사기간': '공사기간' };
+function findInfoKey(q) { const n = norm(q); return INFO_KEYS.find((k) => norm(k) === n) || INFO_ALIAS[n] || INFO_ALIAS[q] || null; }
+function planChanges(list) {
+  return list.map((c) => {
+    const op = c.op; const s = op === 'site' ? findSite(c.name) : findSite(c.site);
+    const bad = (why) => ({ c, ok: false, why, label: `${op} · ${c.site || c.name || '?'}` });
+    if (op === 'site') return { c, ok: !!c.name, s, label: s ? `현장 정보 수정 · ${s.short}` : `새 현장 추가 · ${c.name}`, why: c.name ? '' : '현장명 없음' };
+    if (!s) return bad('현장을 찾지 못함');
+    if (op === 'stage') { const i = findStage(c.stage); if (i < 0) return bad('단계 이름을 모름: ' + c.stage); return { c, ok: true, s, i, label: `${s.short} · ${STAGES[i]}: ${s.stages[i] || '–'} → ${c.value || '(지움)'}` }; }
+    if (op === 'info') { const k = findInfoKey(c.key); if (!k) return bad('항목 이름을 모름: ' + c.key); return { c, ok: true, s, k, label: `${s.short} · ${k}: ${c.value}` }; }
+    if (op === 'memo') return { c, ok: true, s, label: `${s.short} · 메모: ${c.value}` };
+    if (op === 'log') { if (!c.text) return bad('내용 없음'); return { c, ok: true, s, label: `${s.short} · 기록 추가 (${c.date || '날짜 없음'}): ${c.text}` }; }
+    if (op === 'doc') { if (!c.name) return bad('서류명 없음'); const ex = s.docs.find((d) => norm(d.name) === norm(c.name)); return { c, ok: true, s, ex, label: `${s.short} · 서류 ${ex ? '수정' : '추가'}: ${c.name} ${c.status || ''}` }; }
+    return bad('모르는 종류: ' + op);
+  });
+}
+async function applyPlan(plan) {
+  let n = 0;
+  for (const p of plan.filter((x) => x.ok)) {
+    const c = p.c; let s = p.s;
+    if (c.op === 'site') {
+      const base = s || { id: S.uid(), cat: 'FC', name: c.name, short: '', kind: '', sort: Math.max(0, ...st.sites.map((x) => x.sort || 0)) + 1, year: new Date().getFullYear(), stages: Array(14).fill(''), memo: '', info: {}, logs: [], docs: [] };
+      const info = { ...base.info }; Object.entries(c.info || {}).forEach(([k, v]) => { const kk = findInfoKey(k); if (kk) info[kk] = v; });
+      const row = { ...base, cat: CATS[c.cat] ? c.cat : base.cat, name: c.name, short: c.short || base.short || c.name.replace(/\(.*?\)/g, '').trim(), kind: c.kind ?? base.kind, memo: c.memo ?? base.memo, info };
+      if (Array.isArray(c.stages)) row.stages = c.stages.concat(Array(14).fill('')).slice(0, 14);
+      await S.saveSite(row); if (!s) st.sites.push({ ...row, logs: [], docs: [] }); else Object.assign(s, row); n++; continue;
+    }
+    if (c.op === 'stage') { const row = { ...s, stages: [...s.stages] }; row.stages[p.i] = c.value || ''; await S.saveSite(row); s.stages = row.stages; }
+    if (c.op === 'info') { const row = { ...s, info: { ...s.info, [p.k]: c.value || '' } }; if (!c.value) delete row.info[p.k]; await S.saveSite(row); s.info = row.info; }
+    if (c.op === 'memo') { const row = { ...s, memo: c.value || '' }; await S.saveSite(row); s.memo = row.memo; }
+    if (c.op === 'log') { const l = { id: S.uid(), date: c.date || md(TODAY()), kind: '기록', text: c.text, result: c.result || '', note: '', done: false, photos: [] }; await S.saveLog(s.id, l); s.logs.push(l); }
+    if (c.op === 'doc') { const d = p.ex ? { ...p.ex, date: c.date ?? p.ex.date, status: c.status ?? p.ex.status, note: c.note ?? p.ex.note } : { id: S.uid(), date: c.date || '', name: c.name, status: c.status || '', note: c.note || '' }; await S.saveDoc(s.id, d); if (p.ex) Object.assign(p.ex, d); else s.docs.push(d); }
+    n++;
+  }
+  return n;
+}
+function pasteChanges() {
+  dialog(`<h3>Claude 변경 붙여넣기</h3>
+  <p style="margin:0;color:var(--muted);font-size:13.5px">쿠팡 일정공유 프로젝트의 Claude가 만들어 준 변경 내용(코드 블록)을 통째로 붙여넣으세요. 확인 화면을 보고 반영해요.</p>
+  <div class="f"><label for="pc">변경 내용</label><textarea id="pc" style="min-height:160px;font-family:var(--font-mono,monospace);font-size:12.5px" placeholder='{"tsc":1,"changes":[ ... ]}'></textarea></div>
+  <div id="pv"></div><div class="err" id="perr"></div>
+  <div class="dlg-f"><button class="btn" data-close>닫기</button><button class="btn" id="chk">확인하기</button><button class="btn pri" id="go" hidden>반영하기</button></div>`, (d, close) => {
+    let plan = null;
+    d.querySelector('#chk').onclick = () => {
+      const t = d.querySelector('#pc').value; const a = t.indexOf('{'), b = t.lastIndexOf('}');
+      d.querySelector('#perr').textContent = ''; d.querySelector('#go').hidden = true; d.querySelector('#pv').innerHTML = '';
+      let obj; try { obj = JSON.parse(t.slice(a, b + 1)); } catch (e) { d.querySelector('#perr').textContent = '형식을 읽을 수 없어요. Claude가 준 코드 블록 전체를 붙여넣었는지 확인해 주세요.'; return; }
+      const list = Array.isArray(obj) ? obj : obj.changes;
+      if (!Array.isArray(list) || !list.length) { d.querySelector('#perr').textContent = '변경 항목이 없어요.'; return; }
+      plan = planChanges(list);
+      const okN = plan.filter((p) => p.ok).length;
+      d.querySelector('#pv').innerHTML = `<div class="panel" style="max-height:260px;overflow:auto">${plan.map((p) => `<div class="row" style="cursor:default"><span class="pill ${p.ok ? 'ok' : 'danger'}">${p.ok ? '반영' : '건너뜀'}</span><span class="main"><span class="s" style="white-space:normal">${esc(p.label)}${p.ok ? '' : ' — ' + esc(p.why)}</span></span></div>`).join('')}</div>`;
+      const go = d.querySelector('#go'); go.hidden = !okN; go.textContent = `${okN}건 반영하기`;
+    };
+    d.querySelector('#go').onclick = async () => {
+      d.querySelector('#go').disabled = true;
+      try { const n = await applyPlan(plan); close(); render(); toast(`${n}건 반영했어요`); }
+      catch (e) { d.querySelector('#perr').textContent = '반영 중 멈췄어요: ' + e.message + ' (앞부분은 이미 저장됐을 수 있어요)'; d.querySelector('#go').disabled = false; }
+    };
+  });
+}
+
 function confirmBox(msg, yes) {
   dialog(`<h3>확인</h3><p style="margin:0">${esc(msg)}</p><div class="dlg-f"><button class="btn" data-close>취소</button><button class="btn pri" id="yes" style="background:var(--danger);border-color:var(--danger)">지우기</button></div>`, (d, close) => { d.querySelector('#yes').onclick = async () => { close(); await yes(); render(); }; });
 }
@@ -492,6 +569,7 @@ document.addEventListener('click', (e) => {
   if (a === 'excel-one') return excel(id);
   if (!st.editing) { if (a === 'edit-stage') return; return askPass(); }
   if (a === 'add-site') return editSite(null);
+  if (a === 'paste') return pasteChanges();
   if (!s) return;
   if (a === 'edit-stage') return editStage(s, +t.dataset.i);
   if (a === 'edit-site') return editSite(s);
