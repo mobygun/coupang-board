@@ -415,7 +415,7 @@ const INFO_ALIAS = { '주소': '비고', '현설': '현설 일시', '입찰': '�
 function findInfoKey(q) { const n = norm(q); return INFO_KEYS.find((k) => norm(k) === n) || INFO_ALIAS[n] || INFO_ALIAS[q] || null; }
 function planChanges(list) {
   return list.map((c) => {
-    const op = c.op; const s = op === 'site' ? findSite(c.name) : findSite(c.site);
+    const op = c.op; const s = op === 'site' ? findSite(c.name) : findSite(c.site || c.site_id);
     const bad = (why) => ({ c, ok: false, why, label: `${op} · ${c.site || c.name || '?'}` });
     if (op === 'site') return { c, ok: !!c.name, s, label: s ? `현장 정보 수정 · ${s.short}` : `새 현장 추가 · ${c.name}`, why: c.name ? '' : '현장명 없음' };
     if (!s) return bad('현장을 찾지 못함');
