@@ -23,6 +23,7 @@ const IC = {
   plus: '<path d="M12 5v14M5 12h14"/>', edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
   back: '<path d="M15 6l-6 6 6 6"/>', dl: '<path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/>', cam: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   next: '<path d="M9 6l6 6-6 6"/>',
+  hist: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
 };
 const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -125,7 +126,7 @@ function waiting() {
 }
 
 // ───── 화면 공통 ─────
-const ROUTES = [['home', '홈', 'home'], ['sites', '현장', 'list'], ['calendar', '달력', 'cal']];
+const ROUTES = [['home', '홈', 'home'], ['sites', '현장', 'list'], ['calendar', '달력', 'cal'], ['log', '변경 기록', 'hist']];
 function nav(cur) {
   const h = ROUTES.map(([r, n, i]) => `<a href="#${r}" class="${cur === r ? 'on' : ''}">${ic(i)}<span>${n}</span></a>`).join('');
   document.getElementById('nav').innerHTML = h;
@@ -140,6 +141,13 @@ const siteById = (id) => st.sites.find((s) => s.id === id);
 const go = (h) => { if (location.hash === '#' + h) render(); else location.hash = h; };
 
 // ───── 홈 ─────
+// ───── 변경 기록 남기기 ─────
+const myName = () => { try { return localStorage.getItem('tsc-name') || '사람'; } catch (e) { return '사람'; } };
+function note(siteId, op, summary, ref) {
+  const who = myName();
+  st.activity.unshift({ id: 'tmp' + Date.now(), at: new Date().toISOString(), who, site_id: siteId, op, summary, ref });
+  S.note(siteId, op, summary, ref, who).then((id) => { const a = st.activity.find((x) => x.ref === ref && x.summary === summary && String(x.id).startsWith('tmp')); if (a && id) a.id = id; }).catch(() => {});
+}
 // ───── 차례(우리/쿠팡/모름/끝) ─────
 const TURNS = ['우리', '쿠팡', '모름', '끝'];
 const plan = (s) => ({ turn: (s.info || {})._turn || '', next: (s.info || {})._next || '', due: (s.info || {})._due || '', since: (s.info || {})._since || '' });
@@ -182,6 +190,20 @@ function flowOf(s) {
 const ddText = (d) => { const n = Math.round((d - TODAY()) / 864e5); return n < 0 ? `${-n}일 지남` : n === 0 ? '오늘' : n === 1 ? '내일' : `D-${n}`; };
 const ddLevel = (d) => { const n = Math.round((d - TODAY()) / 864e5); return n <= 0 ? 'now' : n <= 3 ? 'soon' : 'later'; };
 
+function feedItem(a) {
+  const s = siteById(a.site_id); const id = 'a|' + a.site_id + '|' + a.id; const t = new Date(a.at);
+  return `<button class="fitem ${st.open === id ? 'open' : ''}" data-open="${id}"><span class="fwhen">${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</span><span class="fwho ${a.who === 'AI' ? 'ai' : ''}">${esc(a.who)}</span><span class="fsite">${esc(s ? s.short : '')}</span><span class="fsum">${esc(a.summary)}</span>${st.open === id ? `<span class="factions">${s ? `<span class="fa" data-feed="fix" data-aid="${a.id}">고치기</span><span class="fa" data-site-go="${esc(a.site_id)}">현장 보기</span>` : ''}<span class="fa dim" data-feed="del" data-aid="${a.id}">목록에서 빼기</span></span>` : ''}</button>`;
+}
+function viewLog() {
+  const q = (st.logQ || '').trim();
+  const list = st.activity.filter((a) => { const s = siteById(a.site_id); return !q || (s && (s.short + s.name).includes(q)) || (a.summary || '').includes(q) || (a.who || '').includes(q); });
+  const days = new Map();
+  list.forEach((a) => { const t = new Date(a.at); const k = `${t.getMonth() + 1}/${t.getDate()} (${WD[t.getDay()]})`; (days.get(k) || days.set(k, []).get(k)).push(a); });
+  return `
+  <div class="hrow"><h1 class="headline">변경 기록</h1><input class="search" id="lq" type="search" placeholder="현장·내용·이름 찾기" value="${esc(q)}"></div>
+  <div class="myname">고친 사람 이름 <input id="nm" value="${esc(myName() === '사람' ? '' : myName())}" placeholder="예: 김건" maxlength="10"><button class="btn" id="nmok">저장</button><span>이 기기에서 고치면 이 이름으로 남아요</span></div>
+  ${[...days.entries()].map(([d, arr]) => `<section class="lday"><h2 class="ldate">${d}<span>${arr.length}건</span></h2><div class="feed">${arr.map(feedItem).join('')}</div></section>`).join('') || '<div class="none">기록이 없어요</div>'}`;
+}
 function viewHome() {
   const { todo, unknown, wait } = buckets();
   const urgent = todo.filter((t) => ddLevel(t.due) === 'now');
@@ -207,13 +229,13 @@ function viewHome() {
     </div>
   </section>
   ${st.activity.length ? `<section>
-    <h2 class="ch">최근 반영</h2>
-    <div class="feed">${st.activity.slice(0, 15).map((a) => { const s = siteById(a.site_id); const id = 'a|' + a.site_id + '|' + a.id; const t = new Date(a.at); return `<button class="fitem ${st.open === id ? 'open' : ''}" data-open="${id}"><span class="fwhen">${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</span><span class="fwho ${a.who === 'AI' ? 'ai' : ''}">${esc(a.who)}</span><span class="fsite">${esc(s ? s.short : '')}</span><span class="fsum">${esc(a.summary)}</span>${st.open === id ? `<span class="factions"><span class="fa" data-feed="fix" data-aid="${a.id}">고치기</span><span class="fa" data-site-go="${esc(a.site_id)}">현장 보기</span><span class="fa dim" data-feed="del" data-aid="${a.id}">목록에서 빼기</span></span>` : ''}</button>`; }).join('')}</div>
+    <div class="sec-h"><h2 class="ch">최근 반영</h2><a href="#log" class="sub">전체 변경 기록 ›</a></div>
+    <div class="feed">${st.activity.slice(0, 6).map(feedItem).join('')}</div>
   </section>` : ''}
   <section>
     <h2 class="ch">현장별 흐름</h2>
     <div class="tbl-wrap"><div class="flows">
-      ${flows.map((s) => `<button class="frow" data-site="${s.id}"><span class="fname"><b>${esc(s.short)}</b><small>${s.cat === 'FC' ? 'FC' : s.cat === 'MB' ? '캠프' : '기타'}</small></span><span class="fsteps">${flowOf(s).map((p) => `<i class="fs ${p.k}">${esc(p.label)}${p.k === 'unk' ? ' ?' : ''}</i>`).join('')}</span><span class="fturn ${turnCls[plan(s).turn] || ''}">${esc(plan(s).turn)}</span></button>`).join('')}
+      ${[['FC', 'FC 공사'], ['MB', '캠프·모바일캠프'], ['ETC', '기타']].map(([c, n]) => { const g = flows.filter((s) => s.cat === c).sort((a, b) => ['우리', '모름', '쿠팡'].indexOf(plan(a).turn) - ['우리', '모름', '쿠팡'].indexOf(plan(b).turn)); return g.length ? `<div class="fgroup"><div class="fghead">${n}<span>${g.length}</span></div>${g.map((s) => `<button class="frow" data-site="${s.id}"><span class="fname"><b>${esc(s.short)}</b></span><span class="fsteps">${flowOf(s).map((p) => `<i class="fs ${p.k}">${esc(p.label)}${p.k === 'unk' ? ' ?' : ''}</i>`).join('')}</span><span class="fturn ${turnCls[plan(s).turn] || ''}">${esc(plan(s).turn)}</span></button>`).join('')}</div>` : ''; }).join('')}
     </div></div>
   </section>`;
 }
@@ -325,7 +347,9 @@ function render() {
   const h = (location.hash || '#home').slice(1);
   const r = h.startsWith('site-') ? 'sites' : (ROUTES.some((x) => x[0] === h) ? h : 'home');
   nav(r); editBtn();
-  $app.innerHTML = h.startsWith('site-') ? viewSite(h.slice(5)) : r === 'sites' ? viewSites() : r === 'calendar' ? viewCalendar() : viewHome();
+  $app.innerHTML = h.startsWith('site-') ? viewSite(h.slice(5)) : r === 'sites' ? viewSites() : r === 'calendar' ? viewCalendar() : r === 'log' ? viewLog() : viewHome();
+  const lq = document.getElementById('lq'); if (lq) lq.oninput = (e) => { st.logQ = e.target.value; const pos = e.target.selectionStart; render(); const n2 = document.getElementById('lq'); n2.focus(); n2.setSelectionRange(pos, pos); };
+  const nmok = document.getElementById('nmok'); if (nmok) nmok.onclick = () => { try { localStorage.setItem('tsc-name', document.getElementById('nm').value.trim()); } catch (e) {} toast('이름을 저장했어요'); };
   const q = document.getElementById('q');
   if (q) q.oninput = (e) => { st.q = e.target.value; const pos = e.target.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); };
   const hide = document.getElementById('hide'); if (hide) hide.onchange = (e) => { st.hideDone = e.target.checked; render(); };
@@ -367,7 +391,7 @@ function editStage(s, i) {
   <div class="quick">${[md(t), '○', '진행중', '대기', 'N/A', 'Ⅹ'].map((q) => `<button class="btn" data-q="${esc(q)}">${q === md(t) ? '오늘 ' + q : q}</button>`).join('')}<button class="btn" data-q="">지우기</button></div>
   <div class="dlg-f"><button class="btn" data-close>취소</button><button class="btn pri" id="ok">저장</button></div>`, (d, close) => {
     d.querySelectorAll('[data-q]').forEach((b) => (b.onclick = () => (d.querySelector('#sv').value = b.dataset.q)));
-    const save = async () => { const v = d.querySelector('#sv').value.trim(); const n = { ...s, stages: [...s.stages] }; n.stages[i] = v; if (await guard(() => S.saveSite(n), '저장했어요')) { s.stages[i] = v; close(); render(); } };
+    const save = async () => { const v = d.querySelector('#sv').value.trim(); const n = { ...s, stages: [...s.stages] }; n.stages[i] = v; const old = s.stages[i]; if (await guard(() => S.saveSite(n), '저장했어요')) { s.stages[i] = v; note(s.id, 'stage', `${STAGES[i]}: ${old || '–'} → ${v || '(지움)'}`); close(); render(); } };
     d.querySelector('#ok').onclick = save; d.querySelector('#sv').onkeydown = (e) => { if (e.key === 'Enter') save(); };
   });
 }
@@ -391,10 +415,10 @@ function editSite(s) {
       const info = {}; INFO_KEYS.forEach((k, i) => { const x = v('e-i' + i); if (x) info[k] = x; });
       const n = { ...s, cat: v('e-cat'), year: +v('e-year') || s.year, name: v('e-name'), short: v('e-short') || v('e-name').replace(/\(.*?\)/g, '').trim(), kind: v('e-kind'), info, memo: v('e-memo'), closed: d.querySelector('#e-closed').checked ? '취소' : '' };
       const { logs, docs, ...row } = n;
-      if (await guard(() => S.saveSite(n), '저장했어요')) { if (isNew) st.sites.push({ ...row, logs: [], docs: [] }); else Object.assign(s, row); close(); isNew ? go('site-' + n.id) : render(); }
+      if (await guard(() => S.saveSite(n), '저장했어요')) { note(n.id, 'site', isNew ? '새 현장: ' + n.name : '기본정보 수정'); if (isNew) st.sites.push({ ...row, logs: [], docs: [] }); else Object.assign(s, row); close(); isNew ? go('site-' + n.id) : render(); }
     };
     const del = d.querySelector('#del');
-    if (del) del.onclick = () => confirmBox(`'${s.name}' 현장과 기록 ${s.logs.length}건을 지울까요? 되돌릴 수 없어요.`, async () => { if (await guard(() => S.deleteSite(s.id), '삭제했어요')) { st.sites = st.sites.filter((x) => x !== s); go('sites'); } });
+    if (del) del.onclick = () => confirmBox(`'${s.name}' 현장과 기록 ${s.logs.length}건을 지울까요? 되돌릴 수 없어요.`, async () => { if (await guard(() => S.deleteSite(s.id), '삭제했어요')) { note(s.id, 'site', '현장 삭제: ' + s.name); st.sites = st.sites.filter((x) => x !== s); go('sites'); } });
   });
 }
 
@@ -493,7 +517,7 @@ function editPlan(s) {
     d.querySelectorAll('[data-tn]').forEach((b) => (b.onclick = () => { turn = b.dataset.tn; d.querySelectorAll('[data-tn]').forEach((x) => x.classList.toggle('pri', x === b)); if (turn !== p.turn && !d.querySelector('#p-since').value) d.querySelector('#p-since').value = md(TODAY()); }));
     d.querySelector('#ok').onclick = async () => {
       const info = { ...s.info, _turn: turn, _next: d.querySelector('#p-next').value.trim(), _due: d.querySelector('#p-due').value.trim(), _since: d.querySelector('#p-since').value.trim() || (turn !== p.turn ? md(TODAY()) : p.since) };
-      if (await guard(() => S.saveSite({ ...s, info }), '저장했어요')) { s.info = info; close(); render(); }
+      if (await guard(() => S.saveSite({ ...s, info }), '저장했어요')) { s.info = info; note(s.id, 'plan', `${info._turn || ''} 차례 · 다음: ${info._next || '-'}${info._due ? ' · ' + info._due : ''}`); close(); render(); }
     };
   });
 }
@@ -526,10 +550,10 @@ function editLog(s, l) {
       const text = d.querySelector('#l-text').value.trim();
       if (!text) { d.querySelector('#l-err').textContent = '내용을 넣어주세요.'; return; }
       const n = { ...l, date: d.querySelector('#l-date').value.trim(), kind: kindSel.value, text, result: d.querySelector('#l-res').value.trim(), note: '', done: kindSel.value === '이슈' && d.querySelector('#l-done').checked };
-      if (await guard(() => S.saveLog(s.id, n), '저장했어요')) { const i = s.logs.findIndex((x) => x.id === n.id); i >= 0 ? (s.logs[i] = n) : s.logs.push(n); close(); render(); }
+      if (await guard(() => S.saveLog(s.id, n), '저장했어요')) { note(s.id, 'log', (isNew ? '' : '기록 수정: ') + n.text.slice(0, 80) + (n.photos.length ? ` (사진 ${n.photos.length})` : ''), n.id); const i = s.logs.findIndex((x) => x.id === n.id); i >= 0 ? (s.logs[i] = n) : s.logs.push(n); close(); render(); }
     };
     const del = d.querySelector('#del');
-    if (del) del.onclick = () => confirmBox('이 기록을 지울까요?', async () => { if (await guard(() => S.deleteLog(s.id, l.id), '삭제했어요')) s.logs = s.logs.filter((x) => x.id !== l.id); });
+    if (del) del.onclick = () => confirmBox('이 기록을 지울까요?', async () => { if (await guard(() => S.deleteLog(s.id, l.id), '삭제했어요')) note(s.id, 'log', '기록 삭제: ' + l.text.slice(0, 60)), s.logs = s.logs.filter((x) => x.id !== l.id); });
   });
 }
 function editDoc(s, doc) {
@@ -544,10 +568,10 @@ function editDoc(s, doc) {
     d.querySelector('#ok').onclick = async () => {
       const n = { ...doc, date: d.querySelector('#d-date').value.trim(), status: d.querySelector('#d-st').value.trim(), name: d.querySelector('#d-name').value.trim(), note: d.querySelector('#d-note').value.trim() };
       if (!n.name) { d.querySelector('#d-err').textContent = '서류명을 넣어주세요.'; return; }
-      if (await guard(() => S.saveDoc(s.id, n), '저장했어요')) { const i = s.docs.findIndex((x) => x.id === n.id); i >= 0 ? (s.docs[i] = n) : s.docs.push(n); close(); render(); }
+      if (await guard(() => S.saveDoc(s.id, n), '저장했어요')) { note(s.id, 'doc', `서류 ${isNew ? '추가' : '수정'}: ${n.name} ${n.status || ''}`.trim(), n.id); const i = s.docs.findIndex((x) => x.id === n.id); i >= 0 ? (s.docs[i] = n) : s.docs.push(n); close(); render(); }
     };
     const del = d.querySelector('#del');
-    if (del) del.onclick = () => confirmBox('이 서류 기록을 지울까요?', async () => { if (await guard(() => S.deleteDoc(s.id, doc.id), '삭제했어요')) s.docs = s.docs.filter((x) => x.id !== doc.id); });
+    if (del) del.onclick = () => confirmBox('이 서류 기록을 지울까요?', async () => { if (await guard(() => S.deleteDoc(s.id, doc.id), '삭제했어요')) note(s.id, 'doc', '서류 삭제: ' + doc.name), s.docs = s.docs.filter((x) => x.id !== doc.id); });
   });
 }
 function editSecret(s) {
@@ -559,7 +583,7 @@ function editSecret(s) {
     d.querySelector('#ok').onclick = async () => {
       const n = { amounts: {}, contact: d.querySelector('#ct').value.trim() };
       AMOUNT_KEYS.forEach((k, i) => { const v = d.querySelector('#a' + i).value.trim(); if (v) n.amounts[k] = v; });
-      if (await guard(() => S.saveSecret(s.id, n), '저장했어요')) { st.secrets[s.id] = n; close(); render(); }
+      if (await guard(() => S.saveSecret(s.id, n), '저장했어요')) { note(s.id, 'secret', '금액·연락처 수정'); st.secrets[s.id] = n; close(); render(); }
     };
   });
 }
@@ -653,7 +677,7 @@ document.addEventListener('click', (e) => {
   if (a === 'paste') return pasteChanges();
   if (!s) return;
   if (a === 'edit-stage') return editStage(s, +t.dataset.i);
-  if (a === 'set-turn') { const tn = t.dataset.t; const info = { ...s.info, _turn: tn, _since: plan(s).turn === tn ? plan(s).since : md(TODAY()) }; guard(() => S.saveSite({ ...s, info }), '저장했어요').then((ok) => { if (ok) { s.info = info; render(); } }); return; }
+  if (a === 'set-turn') { const tn = t.dataset.t; const info = { ...s.info, _turn: tn, _since: plan(s).turn === tn ? plan(s).since : md(TODAY()) }; guard(() => S.saveSite({ ...s, info }), '저장했어요').then((ok) => { if (ok) { s.info = info; note(s.id, 'plan', `${tn === '끝' ? '끝남' : tn + ' 차례'}로 바꿈`); render(); } }); return; }
   if (a === 'edit-plan') return editPlan(s);
   if (a === 'edit-site') return editSite(s);
   if (a === 'edit-secret') return editSecret(s);

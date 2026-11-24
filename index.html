@@ -232,8 +232,8 @@ table.docs td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:t
 .tmore{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;padding:8px 14px 12px;font-size:13.5px;color:var(--muted)}
 .tgo{color:var(--accent);font-weight:500;margin-left:auto;cursor:pointer}
 .none{color:var(--muted);font-size:14px;padding:12px 0}
-.flows{min-width:820px;display:flex;flex-direction:column;border-top:1.5px solid var(--ink)}
-.frow{display:grid;grid-template-columns:140px minmax(0,1fr) 56px;gap:14px;align-items:center;padding:9px 0;border:0;border-bottom:1px solid var(--line);background:none;cursor:pointer;text-align:left}
+.flows{min-width:780px;display:flex;flex-direction:column}
+.frow{display:grid;grid-template-columns:110px minmax(0,1fr) 48px;gap:14px;align-items:center;padding:9px 0;border:0;border-bottom:1px solid var(--line);background:none;cursor:pointer;text-align:left}
 .frow:hover{background:var(--soft)}
 .fname{display:flex;align-items:baseline;gap:6px} .fname small{color:var(--muted);font-size:11.5px}
 .fsteps{display:flex;gap:4px;flex-wrap:wrap}
@@ -261,6 +261,17 @@ table.docs td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:t
 .fwho{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--muted)} .fwho.ai{background:var(--accent-soft);color:var(--accent)}
 .fsite{font-weight:700;min-width:64px} .fsum{flex:1;min-width:200px}
 .factions{flex-basis:100%;display:flex;gap:14px;padding-left:96px} .fa{color:var(--accent);font-size:13.5px;font-weight:500} .fa.dim{color:var(--muted)}
+.fgroup{display:flex;flex-direction:column;margin-bottom:18px}
+.fghead{display:flex;align-items:baseline;gap:8px;font-family:var(--font-display);font-weight:600;font-size:15px;padding:8px 2px;border-bottom:2px solid var(--ink)}
+.fghead span{color:var(--muted);font-size:13px;font-weight:400}
+.frow:nth-child(odd){background:color-mix(in srgb,var(--soft) 55%,transparent)}
+.frow{padding:10px 6px}
+.lday{display:flex;flex-direction:column;gap:6px}
+.ldate{font-size:16px;display:flex;gap:8px;align-items:baseline} .ldate span{color:var(--muted);font-size:13px;font-weight:400}
+.myname{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:14px;color:var(--muted)}
+.myname input{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:6px 10px;width:120px}
+.myname span{font-size:12.5px}
+.sec-h a.sub{text-decoration:none;color:var(--accent)}
 /* 휴대폰 */
 .bnav{display:none}
 @media (max-width:760px){
@@ -293,9 +304,9 @@ table.docs td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:t
 <main id="app"></main>
 <nav class="bnav" id="bnav"></nav>
 <div id="layer"></div>
-<script src="config.js?v=8"></script>
+<script src="config.js?v=9"></script>
 <script src="seed.js" onerror="void 0"></script>
-<script src="store.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="store.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

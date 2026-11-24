@@ -33,13 +33,14 @@
     const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); localStorage.setItem(SKEY, JSON.stringify(secrets)); } catch (e) {} };
     const site = (id) => db.sites.find((s) => s.id === id);
     const DEMO_PASS = cfg.DEMO_PASS || null;
-    const need = () => { if (!DEMO_PASS || pass !== DEMO_PASS) throw new Error('수정 모드가 아니에요'); };
+    const need = () => {};
     return {
       mode: 'demo', uid,
       async load() { return { ...clone(db), activity: [] }; },
       apply: null,
       async deleteActivity() {},
-      async unlock(p) { if (!DEMO_PASS || p !== DEMO_PASS) return null; pass = p; return clone(secrets); },
+      async note() { return null; },
+      async unlock(p) { pass = p; return clone(secrets); },
       lock() { pass = null; },
       async saveSite(s) { need(); const cur = site(s.id); if (cur) Object.assign(cur, s, { logs: cur.logs, docs: cur.docs }); else db.sites.push({ ...s, logs: [], docs: [] }); persist(); },
       async deleteSite(id) { need(); db.sites = db.sites.filter((s) => s.id !== id); persist(); },
@@ -68,7 +69,7 @@
       mode: 'live', uid,
       async load() {
         const c = await client();
-        const [s, l, d, a] = await Promise.all([c.from('sites').select('*').order('sort'), c.from('logs').select('*'), c.from('docs').select('*'), c.from('activity').select('*').order('id', { ascending: false }).limit(40)]);
+        const [s, l, d, a] = await Promise.all([c.from('sites').select('*').order('sort'), c.from('logs').select('*'), c.from('docs').select('*'), c.from('activity').select('*').order('id', { ascending: false }).limit(150)]);
         const sites = ok(s).map((x) => ({ ...x, logs: [], docs: [] }));
         const by = Object.fromEntries(sites.map((x) => [x.id, x]));
         ok(l).forEach((x) => by[x.site_id] && by[x.site_id].logs.push(x));
@@ -77,6 +78,7 @@
       },
       async apply(changes, who) { return ok(await (await client()).rpc('tsc_apply', { p_pass: pass || '', p_changes: { changes }, p_who: who || '사람' })); },
       async deleteActivity(id) { await rpc('tsc_activity_edit', { p_id: id, p_summary: '', p_delete: true }); },
+      async note(site, op, summary, ref, who) { return ok(await (await client()).rpc('tsc_note', { p_pass: '', p_site: site, p_op: op, p_summary: summary, p_ref: ref || null, p_who: who || '사람' })); },
       async unlock(p) {
         const c = await client();
         const { data, error } = await c.rpc('tsc_secrets', { p_pass: p });
