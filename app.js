@@ -244,15 +244,23 @@ function viewHome() {
 function viewSites() {
   const q = st.q.trim().toLowerCase();
   let list = st.sites.filter((s) => (st.cat === 'ALL' || s.cat === st.cat) && (!q || (s.name + s.short + s.memo).toLowerCase().includes(q)));
-  if (st.hideDone) list = list.filter((s) => siteStatus(s).active);
-  const counts = (c) => st.sites.filter((s) => (c === 'ALL' || s.cat === c) && (!st.hideDone || siteStatus(s).active)).length;
+  const live = (s) => !s.closed && plan(s).turn !== '끝';
+  if (st.hideDone) list = list.filter(live);
+  const rank = (s) => { const p = plan(s); const d = parseDate(p.due, s.year); return p.turn === '우리' ? (d ? 0 : 1) : p.turn === '모름' ? 2 : p.turn === '쿠팡' ? 3 : p.turn === '끝' || s.closed ? 5 : 4; };
+  list.sort((a, b) => rank(a) - rank(b) || ((parseDate(plan(a).due, a.year) || 9e15) - (parseDate(plan(b).due, b.year) || 9e15)) || (a.sort || 0) - (b.sort || 0));
+  const counts = (c) => st.sites.filter((s) => (c === 'ALL' || s.cat === c) && (!st.hideDone || live(s))).length;
   const card = (s) => {
-    const ss = siteStatus(s), oi = openIssues(s).length, pc = photoCount(s), ll = lastLog(s);
-    return `<button class="card ${ss.active ? '' : 'closed'}" data-site="${s.id}">
-      <div class="card-h"><h3>${esc(s.name)}</h3><span class="pill ${ss.cls}">${esc(ss.label)}</span></div>
-      <div class="st">${plan(s).turn ? `<span class="ct t-${plan(s).turn}">${esc(plan(s).turn)}</span> ` : ''}${esc(plan(s).next || ss.text || s.memo || '')}${plan(s).due ? ` · ${esc(plan(s).due)}` : ''}</div>
-      <div class="bar">${ss.states.map((x, i) => `<i class="${x}" title="${STAGES[i]}"></i>`).join('')}</div>
-      <div class="meta">${oi ? `<span class="pill danger">이슈 ${oi}</span>` : ''}<span>기록 ${s.logs.length}</span><span>사진 ${pc}</span>${ll ? `<span>최근 ${md(ll)}</span>` : ''}<span style="margin-left:auto">${CATS[s.cat]}</span></div>
+    const p = plan(s), pc = photoCount(s), ll = lastLog(s), due = parseDate(p.due, s.year);
+    const turnTxt = { 우리: '우리 차례', 쿠팡: '쿠팡 차례', 모름: '모름', 끝: '끝남' }[p.turn] || '차례 미정';
+    const nextTxt = p.turn === '끝' ? '끝난 공사' : p.next || (p.turn === '모름' ? '무엇을 알아내야 할까요?' : '다음 할 일을 정해 주세요');
+    const empty = !p.next && p.turn !== '끝';
+    const age = p.since ? daysSince(s, p.since) : null;
+    const right = due ? `<span class="cdd ${ddLevel(due)}">${ddText(due)}</span>` : p.turn === '쿠팡' && age != null ? `<span class="cdd wait">${age}일째</span>` : p.turn === '모름' && age != null ? `<span class="cdd unk">${age}일째</span>` : '';
+    return `<button class="card c-${esc(p.turn || 'none')} ${live(s) ? '' : 'closed'}" data-site="${s.id}">
+      <div class="card-h"><h3>${esc(s.name)}</h3><span class="ct2 t-${esc(p.turn || 'none')}">${turnTxt}</span></div>
+      <div class="cnext ${empty ? 'empty' : ''}"><span class="cnk">다음</span><span class="cnt">${esc(nextTxt)}</span>${right}</div>
+      <div class="cflow">${flowOf(s).map((f) => `<i class="fs ${f.k}">${esc(f.label)}${f.k === 'unk' ? ' ?' : ''}</i>`).join('')}</div>
+      <div class="meta"><span>기록 ${s.logs.length}</span><span>사진 ${pc}</span>${ll ? `<span>최근 ${md(ll)}</span>` : ''}<span style="margin-left:auto">${CATS[s.cat]}</span></div>
     </button>`;
   };
   return `
@@ -262,7 +270,6 @@ function viewSites() {
     <label class="chk"><input type="checkbox" id="hide" ${st.hideDone ? 'checked' : ''}> 끝난 현장 숨기기</label>
     <span style="margin-left:auto;display:flex;gap:8px"><button class="btn ed" data-act="paste">${ic('edit')}Claude 변경 붙여넣기</button><button class="btn ed" data-act="add-site">${ic('plus')}현장 추가</button><button class="btn" data-act="excel">${ic('dl')}엑셀로 받기</button></span>
   </div>
-  <div class="legend"><span><i style="background:var(--accent)"></i>완료</span><span><i style="background:var(--warn)"></i>진행·대기</span><span><i style="box-shadow:inset 0 0 0 1.5px var(--accent)"></i>예정</span><span><i style="background:repeating-linear-gradient(45deg,var(--line) 0 3px,transparent 3px 6px)"></i>해당 없음</span><span><i style="background:var(--line)"></i>미진행</span><span>막대 14칸 = ${STAGES[0]} → ${STAGES[13]}</span></div>
   ${list.length ? `<div class="cards">${list.map(card).join('')}</div>` : '<div class="panel"><div class="empty">조건에 맞는 현장이 없어요.</div></div>'}`;
 }
 
@@ -292,7 +299,7 @@ function viewSite(id) {
   </div>
   <section class="planbox">
     <div class="pturns">${TURNS.map((t) => `<button class="pt ${plan(s).turn === t ? 'on t-' + t : ''}" data-act="set-turn" data-t="${t}">${t === '끝' ? '끝남' : t + ' 차례'}</button>`).join('')}</div>
-    <button class="pnext" data-act="edit-plan"><span class="pk">다음</span><b>${esc(plan(s).next || '정해지지 않음')}</b>${plan(s).due ? `<span class="pdue">${esc(plan(s).due)}</span>` : ''}${plan(s).since ? `<span class="psince">${esc(plan(s).since)}부터</span>` : ''}<span class="pedit">고치기</span></button>
+    <button class="pnext ${plan(s).next || plan(s).turn === '끝' ? '' : 'empty'}" data-act="edit-plan"><span class="pk">다음</span><b>${esc(plan(s).turn === '끝' ? '끝난 공사' : plan(s).next || (plan(s).turn === '모름' ? '무엇을 알아내야 할까요? 눌러서 적기' : '다음 할 일 적기'))}</b>${plan(s).due && parseDate(plan(s).due, s.year) ? `<span class="pdue">${esc(plan(s).due)} · ${ddText(parseDate(plan(s).due, s.year))}</span>` : ''}${plan(s).since ? `<span class="psince">${esc(plan(s).since)}부터</span>` : ''}<span class="pedit">고치기</span></button>
   </section>
   <section>
     <div class="sec-h"><h2>진행 단계</h2>${st.editing ? '<span class="sub">칸을 누르면 고칠 수 있어요</span>' : ''}</div>
@@ -677,7 +684,7 @@ document.addEventListener('click', (e) => {
   if (a === 'paste') return pasteChanges();
   if (!s) return;
   if (a === 'edit-stage') return editStage(s, +t.dataset.i);
-  if (a === 'set-turn') { const tn = t.dataset.t; const info = { ...s.info, _turn: tn, _since: plan(s).turn === tn ? plan(s).since : md(TODAY()) }; guard(() => S.saveSite({ ...s, info }), '저장했어요').then((ok) => { if (ok) { s.info = info; note(s.id, 'plan', `${tn === '끝' ? '끝남' : tn + ' 차례'}로 바꿈`); render(); } }); return; }
+  if (a === 'set-turn') { const tn = t.dataset.t; const same = plan(s).turn === tn; const info = { ...s.info, _turn: tn, _since: same ? plan(s).since : md(TODAY()) }; if (!same && (tn === '모름' || tn === '끝')) { info._next = ''; info._due = ''; } if (!same && tn === '쿠팡') info._due = ''; guard(() => S.saveSite({ ...s, info }), '저장했어요').then((ok) => { if (ok) { s.info = info; note(s.id, 'plan', `${tn === '끝' ? '끝남' : tn + ' 차례'}로 바꿈`); render(); } }); return; }
   if (a === 'edit-plan') return editPlan(s);
   if (a === 'edit-site') return editSite(s);
   if (a === 'edit-secret') return editSecret(s);
